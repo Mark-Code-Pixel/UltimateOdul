@@ -21,41 +21,49 @@ jobs:
         uses: android-actions/setup-android@v3
         continue-on-error: true
 
-      - name: Install Android cmdline-tools (fallback)
+      - name: Install packages via sdkmanager
         run: |
           set -e
-          export ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          mkdir -p "$ANDROID_HOME/cmdline-tools"
-          if [ ! -d "$ANDROID_HOME/cmdline-tools/latest" ]; then
+          # Prefer action-provided ANDROID_HOME; else bootstrap
+          if [ -z "$ANDROID_HOME" ] || [ ! -d "$ANDROID_HOME" ]; then
+            export ANDROID_HOME="$HOME/android-sdk"
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
             curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-            unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
-            mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest" || true
+            unzip -qo /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+            rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+            mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           fi
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          SDKM=""
+          for c in \
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "$ANDROID_HOME/cmdline-tools/bin/sdkmanager" \
+            "$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -1)"; do
+            if [ -x "$c" ]; then SDKM="$c"; break; fi
+          done
+          if [ -z "$SDKM" ]; then
+            echo "sdkmanager not found under $ANDROID_HOME"; ls -laR "$ANDROID_HOME" | head -40; exit 1
+          fi
+          echo "Using $SDKM"
+          yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1" \
+            || "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125" "cmake;3.22.1" \
-            || sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Unpack UnoReverse sources
         run: |
           set -e
           rm -rf project && mkdir project
-          if [ -f UnoReverse-GitHub.zip ]; then
-            unzip -q UnoReverse-GitHub.zip -d project
-          else
-            echo "missing zip"; ls -la; exit 1
-          fi
+          unzip -q UnoReverse-GitHub.zip -d project
           if [ -f project/settings.gradle ] || [ -f project/app/build.gradle ]; then
             echo "PROJECT_DIR=project" >> $GITHUB_ENV
           else
             TOP=$(find project -maxdepth 3 \( -name settings.gradle -o -name settings.gradle.kts \) | head -1 | xargs dirname)
             echo "PROJECT_DIR=$TOP" >> $GITHUB_ENV
           fi
-          ls -la "${PROJECT_DIR:-project}"
+          ls -la "$PROJECT_DIR"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
